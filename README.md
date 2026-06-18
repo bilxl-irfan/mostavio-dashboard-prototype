@@ -1,18 +1,16 @@
-# Developer Manual: Ultralight eVTOL Pilot AR HUD Dashboard (PyQt6 & ROS2)
+# Augmented Reality HMI HUD Dashboard for Ultralight eVTOL Aircraft
 
-This manual provides a beginner-friendly, step-by-step guide to the architecture, math, code mechanics, and data integration of the **Mostavio eVTOL pilot AR HUD Dashboard**.
+This repository contains the prototype implementation of an **Augmented Reality (AR) Heads-Up Display (HUD) Interface** designed for electric Vertical Takeoff and Landing (eVTOL) aircraft. 
 
-Developed in Python using **PyQt6**, this prototype showcases how physical cockpit instrumentation can be offloaded to a lightweight, head-worn Augmented Reality display, adhering to the strict empty-weight regulations (e.g., FAR Part 103) of ultralight aircraft.
+Implemented in Python using the **PyQt6** framework, this application models a head-worn pilot overlay that visualizes critical flight telemetry in real-time. By externalizing traditional cockpit instruments into a lightweight AR display, this system directly addresses the strict weight and space constraints of ultralight aviation platforms (e.g., FAR Part 103 regulations).
 
 ---
 
-## 1. System Architecture
+## 1. System Architecture & UI Layout
 
-To make the system easy to demonstrate and ensure it doesn't clutter the pilot's field-of-view, the dashboard features a **split-screen UI**:
-* **Simulation Control Panel (Left)**: Interactive sliders for Speed, Altitude, Heading, Pitch, Roll, and Battery, along with flight state actions and warning injectors.
-* **Pilot AR HUD (Right)**: Superimposes modern, clean HUD vector overlays directly on top of a **dynamic pseudo-3D flight environment** (sky, scrolling ground grid, and wireframe mountains).
-
-The center of the HUD is kept **80% clear** for pilot visibility, only showing a clean central attitude reticle. All telemetry values are pushed to the margins using thin tapes and status pills.
+The application utilizes a **split-screen layout** designed for testing, simulation, and real-time visualization:
+1. **Simulation Control Panel (Left)**: An interactive ground-station control interface equipped with telemetry sliders (Speed, Altitude, Heading, Target Heading, Pitch, Roll, Battery) and warning injectors.
+2. **Pilot AR HUD (Right)**: The primary pilot visor display, superimposing glowing vector symbology over a dynamic flight environment. The center of the HUD is kept **80% clear** to preserve the pilot's primary field-of-view, with instruments pushed to the margins.
 
 ```
 +-------------------------------------------------------------------------+
@@ -21,150 +19,135 @@ The center of the HUD is kept **80% clear** for pilot visibility, only showing a
 |      SIMULATION CONTROL PANEL     |            PILOT AR HUD             |
 |                                   |                                     |
 |  - Speed / Altitude Sliders       |  - Nav & Battery Status Pills (Top) |
-|  - Pitch / Roll / Battery Sliders |  - Thin Compass Tape (Top Center)   |
+|  - Target Hdg / Attitude Sliders  |  - Thin Compass Tape (Top Center)   |
 |  - Flight State Dropdown          |  - Thin Altimeter Tape (Right edge)  |
-|  - Alert Level Injector Buttons   |  - Semi-Circular Speedometer (Left) |
-|  - [X] Enable UDP Port 5005       |  - Real-time Pseudo-3D Terrain Grid |
+|  - Alert Level Injector Buttons   |  - Split Speed/Battery Dial (Left)  |
+|  - Interface Selector (UDP / TCP) |  - Real-time Pseudo-3D Horizon Grid |
 |                                   |  - Wide Alerts Box (Bottom Center)  |
 +-----------------------------------+-------------------------------------+
 ```
 
 ---
 
-## 2. Installation & Quick Start Guide
+## 2. HMI Component Specifications & Mathematics
 
-### Step 1: Install Python Dependencies
-Open your command prompt or PowerShell inside the project directory and run:
-```bash
-pip install PyQt6
-```
+Rather than rendering heavy 3D assets or pre-rendered textures, the HUD draws vector graphics dynamically using the **PyQt6 QPainter** API. This ensures zero loading overhead and keeps rendering latency under **15 milliseconds** (silky smooth 60 FPS refresh rate).
 
-### Step 2: Launch the Integrated Dashboard
-Run the main application:
-```bash
-python dashboard_app.py
-```
-*You can interact with the sliders, change flight states (e.g., Takeoff, Autonomous), and click alert injection buttons to test the display immediately.*
+### A. Combined Dial Cluster (Left Edge)
+To optimize horizontal workspace, the dial merges two primary telemetry gauges into a single, vertically separated circular cluster (Radius $R = 65$ px):
+* **Speedometer (Top Half)**: Renders speed on a $180^\circ$ (left) to $0^\circ$ (right) clockwise arc. The needle's endpoint is mapped using standard trigonometry:
+  $$\theta = 180^\circ - \left( \frac{\text{Speed}}{120} \times 180^\circ \right)$$
+  $$x = \text{spd\_cx} + (R + 2) \times \cos(\theta), \quad y = (\text{cy} - 22) - (R + 2) \times \sin(\theta)$$
+* **Battery Ring (Bottom Half)**: Renders state of charge (SoC) on a $180^\circ$ (left) to $360^\circ$ (right) counter-clockwise progress arc. The arc changes color dynamically: Green ($>50\%$), Yellow/Amber ($20\text{-}50\%$), and flashing Red ($\le 20\%$).
+* **Gap Separator**: A horizontal divider line sits at Y-center (`cy`) separating the two gauges. Small labels read `"SPEED"` above the line and `"BATTERY"` below it.
 
-### Step 3: Run the Networked Telemetry Demo
-1. In the Dashboard window, check the box labeled **"Enable UDP Receiver Port 5005"**. The control sliders will disable, and the system logs will show `UDP Receiver active on 127.0.0.1:5005`.
-2. Open a separate terminal and start the mock flight simulator:
-```bash
-python udp_sender.py
-```
-3. Watch the dashboard come alive! The aircraft will cycle through flight phases:
-   - **Pre-flight checking (ARMED)**
-   - **Nose up and climbing (TAKEOFF)**
-   - **Cruising and banking (IN-FLIGHT)**
-   - **Autonomous cruise (AUTONOMOUS)**
-   - **Nose down and descending (LANDING)**
-   - **Safe landing (DISARMED)**
-4. Note the dynamic warnings popping up in red and amber (e.g., "Battery SoC drops below 50%") inside the pilot alerts feed, now triggered by the *actual* simulated battery charge level instead of step intervals.
+### B. Dynamic Pseudo-3D Horizon
+* **Horizon Translation & Rotation**: The sky and ground gradients are shifted and rotated in the painter context to represent wing bank (Roll) and pitch angles:
+  ```python
+  painter.translate(cx, cy)
+  painter.rotate(-roll)
+  pitch_shift_y = pitch * 2.5  # 1 degree of pitch = 2.5 pixels
+  painter.translate(0, pitch_shift_y)
+  ```
+* **Wireframe Mountains**: Rendered as a continuous line path (`QPolygonF`) scrolling horizontally based on Heading:
+  $$y = \text{horizon} - \left| 22 \times \sin(\text{angle}) + 7 \times \cos(\text{angle} \times 2.3) \right|$$
+* **Ground Grid**: Radial perspective lines expand from the vanishing center, and horizontal depth lines scroll downwards at a rate tied to the current forward velocity.
 
----
+### C. Pitch Ladder & Roll Scale
+* **Pitch Ladder (Center)**: Ticks drawn every $10^\circ$ representing climb/descent pitch. Positive pitch ticks are drawn as solid cyan brackets, and negative pitch ticks are drawn as dashed cyan brackets.
+* **Bank Scale (Top-Center)**: A fixed semi-arc at radius $100$ px with tick marks at $\pm 10^\circ, \pm 20^\circ, \pm 30^\circ$. A green pointer arrow rotates with the aircraft to indicate the exact bank angle.
 
-## 3. How the PyQt6 Custom Painting Works (HMI Logic)
-
-PyQt6 uses a system called **QPainter** to draw shapes, text, and gradients manually on a canvas. This is critical for aviation interfaces because it renders vector graphics directly, keeping latency under 16 milliseconds (running at a smooth 60 FPS).
-
-Here is the breakdown of the custom paint widgets in [dashboard_app.py](file:///c:/Users/bilxl/Downloads/mstv/dashboard_app.py):
-
-### A. The Pseudo-3D Terrain Background
-To simulate what the pilot sees looking out the visor, the widget dynamically draws a moving wireframe environment:
-1. **Sky & Ground Gradients:** We translate the painter to the center of the widget and rotate it by `-roll`. We then draw a sky gradient above the horizon and a ground gradient below it. The horizon line shifts up/down based on pitch ($y = \text{pitch} \times 2.5 \text{ pixels}$).
-2. **Wireframe Horizon Mountains:** Drawn as a continuous line path (`QPolygonF`) using a sine-wave algorithm:
-   $$y = \text{horizon} - \left| 22 \times \sin(\text{angle}) + 7 \times \cos(\text{angle} \times 2.3) \right|$$
-   As heading changes, the angles shift, making the mountains scroll left/right relative to the pilot's view.
-3. **Scrolling Ground Grid:** We draw perspective lines from the vanishing point. To simulate flying forward, we draw horizontal depth lines that scroll downwards at a rate tied to the current aircraft speed.
-
-### B. The Semi-Circular Speedometer
-Rather than sweeping in a full circle (where values like 0 and 120 overlap at the bottom), the speedometer is styled as a clean top-half semi-circle:
-* **The Gauge Arc:** Starts at $180^\circ$ (left edge) and sweeps $-180^\circ$ (clockwise) to $0^\circ$ (right edge) using `painter.drawArc`.
-* **The Scale Ticks:** Spaced every 20 knots. We convert each speed tick percentage into radians to draw the dial ticks:
-  $$\theta = 180^\circ - \left( \frac{\text{TickValue}}{120} \times 180^\circ \right)$$
-  $$\text{inner\_x} = \text{spd\_cx} + (R - 4) \times \cos(\theta), \quad \text{inner\_y} = \text{spd\_cy} - (R - 4) \times \sin(\theta)$$
-* **The Needle:** Points to the active speed percentage on the same $180^\circ \to 0^\circ$ path. This aligns the progress bar and needle perfectly.
-
-### C. Compact Tapes & Margin Pills
-* **Altimeter Tape (Right edge):** Made 30% thinner (width 32px) and pushed to the right margin. Ticks slide vertically relative to the fixed center box representing current altitude.
-* **Compass Ribbon (Top Center):** A thin horizontal compass scale.
-* **Status Pills (Margins):** 
-  - **Top-Left (Navigation):** Calculates the distance remaining and ETA dynamically.
-  - **Top-Right (Power Metrics):** Calculates battery remaining time dynamically:
-    $$\text{Minutes Remaining} = \left(\frac{\text{Battery SoC}}{100}\right) \times 25 \text{ minutes}$$
-  - **Top-Center (Diagnostics):** Displays a live digital clock and overall systems green status.
+### D. Compass Tape (Top Center) & Target Nav Bug
+* **Compass Ribbon**: A horizontal sliding scale indicating the current heading. Ticks scroll left/right relative to a center arrow.
+* **Target Heading Bug (Orange Pointer)**: Calculates the shortest angular distance to the target destination heading:
+  $$\text{diff} = (\text{TargetHeading} - \text{CurrentHeading} + 180^\circ) \pmod{360^\circ} - 180^\circ$$
+* **Edge Guides**: If the target heading goes off-screen ($\text{diff} > \text{visible\_span}$), the HUD draws guide arrows at the margins (e.g., `L 240°` or `240° R`) to direct the pilot's turn.
 
 ---
 
-## 4. Transitioning to ROS2 (Robot Operating System)
+## 3. Network Communication Protocols
 
-When you connect this dashboard to the flight controller computer (e.g., PX4 or Pixhawk running ROS2), you will replace the UDP socket listener thread with a **ROS2 Subscription Node**.
+The dashboard processes network telemetry in background threads (`QThread`) to prevent data processing from blocking the GUI thread.
 
-### Integration Pattern: QThread Bridge
-PyQt6 and ROS2 both use blocking event loops (`app.exec()` and `rclpy.spin()`). Running them on the same thread will freeze the application. The solution is to spin the ROS2 Node inside a background `QThread` and use PyQt's `pyqtSignal` to safely emit parsed JSON data to the GUI thread.
+### A. UDP Mode (Structured JSON) - Port 5005
+Designed for modern, extensible telemetry streaming. Telemetry data is broadcast as JSON packets:
+```json
+{
+  "speed": 68.5,
+  "altitude": 150.0,
+  "heading": 235.0,
+  "target_heading": 240.0,
+  "pitch": 4.2,
+  "roll": -5.0,
+  "battery": 82,
+  "state": "IN-FLIGHT",
+  "alert": {
+    "level": "WARNING",
+    "message": "Strong crosswinds detected."
+  }
+}
+```
 
-Here is the exact code structure:
+### B. TCP Mode (Unity-Bridge Compatibility) - Port 10005
+Designed as a drop-in client to receive data from ROS-to-TCP relays. It opens a TCP socket connection and parses lines separated by `\n` using comma delimiters:
+```
+"SPEED,ALTITUDE" -> E.g., "45.2,120.5\n"
+```
+
+---
+
+## 4. ROS 2 Direct Ingestion Pipeline
+
+To bypass intermediate TCP socket bridges, you can run a native ROS 2 subscriber node directly inside a background PyQt `QThread` using `rclpy`:
 
 ```python
-import sys
-import json
-from PyQt6.QtCore import QThread, pyqtSignal
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String  # Or a custom message type
+from std_msgs.msg import String
+from PyQt6.QtCore import QThread, pyqtSignal
 
 class ROS2TelemetrySubscriber(Node):
-    def __init__(self, telemetry_callback):
+    def __init__(self, callback):
         super().__init__('ar_hud_subscriber')
-        self.callback = telemetry_callback
-        
-        # Subscribe to 'flight_telemetry' topic (buffers 10 messages)
+        self.callback = callback
         self.subscription = self.create_subscription(
             String,
-            'flight_telemetry',
+            '/mostavio/telemetry_raw',
             self.listener_callback,
             10
         )
 
     def listener_callback(self, msg):
         try:
-            # Parse incoming JSON payload
-            payload = json.loads(msg.data)
-            self.callback(payload)  # Send parsed telemetry dict to PyQt QThread
+            # Parse incoming telemetry payload "SPEED,ALTITUDE"
+            parts = msg.data.split(",")
+            payload = {
+                "speed": float(parts[0]),
+                "altitude": float(parts[1]),
+                "heading": 180.0,
+                "target_heading": 240.0,
+                "pitch": 0.0,
+                "roll": 0.0,
+                "battery": 85,
+                "state": "IN-FLIGHT"
+            }
+            self.callback(payload)  # Send payload back to the main UI thread
         except Exception as e:
-            print(f"[ROS2] Message parsing failure: {e}")
+            print(f"[ROS2] Parsing error: {e}")
 
-class ROS2SubscriberThread(QThread):
-    # Declare a custom signal to communicate with the PyQt main window
+class ROS2ReceiverThread(QThread):
     telemetry_received = pyqtSignal(dict)
     log_message = pyqtSignal(str)
 
     def run(self):
         self.log_message.emit("Initializing ROS2 Context...")
-        rclpy.init(args=None)
-        
-        # Instantiate subscriber, mapping callback to our pyqtSignal emitter
+        rclpy.init()
         self.node = ROS2TelemetrySubscriber(self.telemetry_received.emit)
-        self.log_message.emit("ROS2 Subscriber Node Listening on 'flight_telemetry'...")
-        
-        # Keep node active
+        self.log_message.emit("ROS2 node active on '/mostavio/telemetry_raw'...")
         rclpy.spin(self.node)
 
     def stop(self):
-        # Shutdown triggers
-        if rclpy.ok():
-            self.node.destroy_node()
-            rclpy.shutdown()
+        self.node.destroy_node()
+        rclpy.shutdown()
         self.wait()
 ```
-
----
-
-## 5. Key Talking Points for Younes
-
-When presenting this dashboard to Younes, emphasize these design upgrades:
-
-1. **Clean Pilot Field-of-View**: By moving the speedometer to a compact semi-circle on the left margin, thinning the altimeter tape on the right, and using margin pills for secondary metrics (time, navigation), the center of the HUD is completely clear. The pilot has maximum visibility of the actual sky.
-2. **Dynamic Pseudo-3D Environment**: The horizon line, sky/ground grids, and mountains tilt, shift, and scroll in real-time, giving an immersive visual simulation of flight movement that runs at a silky smooth 60 FPS using clean coordinate drawing rather than heavy video resources.
-3. **Dynamic Alert Triggers**: The warning alerts log is no longer hardcoded to steps; it dynamically reads real-time battery status and flags low and critical levels accurately (at <50% and <20%), flashing red/amber based on safety parameters.
-4. **Decoupled Telemetry Thread**: The socket thread runs independently of the paint loop. That means heavy sensor telemetry streams (e.g. 50Hz attitude data) will never cause the pilot interface to drop frames or lag.
