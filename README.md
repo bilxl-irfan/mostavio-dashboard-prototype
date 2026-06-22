@@ -89,10 +89,12 @@ Designed for modern, extensible telemetry streaming. Telemetry data is broadcast
 ```
 
 ### B. TCP Mode (Unity-Bridge Compatibility) - Port 10005
-Designed as a drop-in client to receive data from ROS-to-TCP relays. It opens a TCP socket connection and parses lines separated by `\n` using comma delimiters:
-```
-"SPEED,ALTITUDE" -> E.g., "45.2,120.5\n"
-```
+Designed as a drop-in client to receive data from ROS-to-TCP relays. It opens a TCP socket connection and automatically parses each line (separated by `\n`):
+1. **JSON Object Format (Full Telemetry)**: If the line starts with `{`, it parses it as a JSON telemetry object containing all flight variables. This is the format output by the simulated `ros2.py` node.
+2. **Legacy Comma-Delimited Format**: If JSON parsing fails, it falls back to parsing:
+   ```
+   "SPEED,ALTITUDE" -> E.g., "45.2,120.5\n"
+   ```
 
 ---
 
@@ -102,6 +104,7 @@ To bypass intermediate TCP socket bridges, you can run a native ROS 2 subscriber
 
 ```python
 import rclpy
+import json
 from rclpy.node import Node
 from std_msgs.msg import String
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -119,21 +122,26 @@ class ROS2TelemetrySubscriber(Node):
 
     def listener_callback(self, msg):
         try:
-            # Parse incoming telemetry payload "SPEED,ALTITUDE"
-            parts = msg.data.split(",")
-            payload = {
-                "speed": float(parts[0]),
-                "altitude": float(parts[1]),
-                "heading": 180.0,
-                "target_heading": 240.0,
-                "pitch": 0.0,
-                "roll": 0.0,
-                "battery": 85,
-                "state": "IN-FLIGHT"
-            }
-            self.callback(payload)  # Send payload back to the main UI thread
-        except Exception as e:
-            print(f"[ROS2] Parsing error: {e}")
+            # Try parsing as JSON first (full flight telemetry package)
+            payload = json.loads(msg.data)
+            self.callback(payload)
+        except json.JSONDecodeError:
+            try:
+                # Fallback: Parse legacy comma-separated "SPEED,ALTITUDE"
+                parts = msg.data.split(",")
+                payload = {
+                    "speed": float(parts[0]),
+                    "altitude": float(parts[1]),
+                    "heading": 180.0,
+                    "target_heading": 240.0,
+                    "pitch": 0.0,
+                    "roll": 0.0,
+                    "battery": 85,
+                    "state": "IN-FLIGHT"
+                }
+                self.callback(payload)  # Send payload back to the main UI thread
+            except Exception as e:
+                print(f"[ROS2] Fallback parsing error: {e}")
 
 class ROS2ReceiverThread(QThread):
     telemetry_received = pyqtSignal(dict)
