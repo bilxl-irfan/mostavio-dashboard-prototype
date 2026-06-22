@@ -754,25 +754,29 @@ class TCPReceiverThread(QThread):
                         line, buffer = buffer.split("\n", 1)
                         line = line.strip()
                         if line:
-                            # Expected packet format: "SPEED,ALTITUDE"
-                            parts = line.split(",")
-                            if len(parts) >= 2:
-                                try:
-                                    # Convert to dashboard unified payload format
-                                    payload = {
-                                        "speed": float(parts[0]),
-                                        "altitude": float(parts[1]),
-                                        # Use standard values for other fields since they are missing in the simple ROS string msg
-                                        "heading": 180.0,
-                                        "target_heading": 240.0,
-                                        "pitch": 0.0,
-                                        "roll": 0.0,
-                                        "battery": 85,
-                                        "state": "IN-FLIGHT"
-                                    }
-                                    self.telemetry_received.emit(payload)
-                                except ValueError:
-                                    continue
+                            try:
+                                # Try parsing as JSON (supporting full telemetry payload)
+                                payload = json.loads(line)
+                                self.telemetry_received.emit(payload)
+                            except json.JSONDecodeError:
+                                # Fallback: Parse comma-separated "SPEED,ALTITUDE" format
+                                parts = line.split(",")
+                                if len(parts) >= 2:
+                                    try:
+                                        payload = {
+                                            "speed": float(parts[0]),
+                                            "altitude": float(parts[1]),
+                                            # Default fallback values for missing attributes
+                                            "heading": 180.0,
+                                            "target_heading": 240.0,
+                                            "pitch": 0.0,
+                                            "roll": 0.0,
+                                            "battery": 85,
+                                            "state": "IN-FLIGHT"
+                                        }
+                                        self.telemetry_received.emit(payload)
+                                    except ValueError:
+                                        continue
             except socket.error as e:
                 self.log_message.emit(f"TCP connection failed. Retrying in 2 seconds...")
                 time.sleep(2.0)
